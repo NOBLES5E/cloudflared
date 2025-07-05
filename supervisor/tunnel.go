@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -566,6 +568,11 @@ func (e *EdgeTunnelServer) serveQUIC(
 	// quic-go 0.44 increases the initial packet size to 1280 by default.
 	// We need a lower value to be compatible with more limited network setup.
 	var initialPacketSize uint16 = 1230
+	if envValue := os.Getenv("CLOUDFLARED_QUIC_INITIAL_PACKET_SIZE"); envValue != "" {
+		if parsed, err := strconv.ParseUint(envValue, 10, 16); err == nil {
+			initialPacketSize = uint16(parsed)
+		}
+	}
 
 	quicConfig := &quic.Config{
 		HandshakeIdleTimeout:       quicpogs.HandshakeIdleTimeout,
