@@ -24,7 +24,13 @@ else
 	DEB_PACKAGE_NAME := $(BINARY_NAME)
 endif
 
-DATE          := $(shell date -u -r RELEASE_NOTES '+%Y-%m-%d-%H%M UTC')
+# Use git in windows since we don't have access to the `date` tool
+ifeq ($(TARGET_OS), windows)
+	DATE := $(shell git log -1 --format="%ad" --date=format-local:'%Y-%m-%dT%H:%M UTC' -- RELEASE_NOTES)
+else
+	DATE := $(shell date -u -r RELEASE_NOTES '+%Y-%m-%d-%H:%M UTC')
+endif
+
 VERSION_FLAGS := -X "main.Version=$(VERSION)" -X "main.BuildTime=$(DATE)"
 ifdef PACKAGE_MANAGER
 	VERSION_FLAGS := $(VERSION_FLAGS) -X "github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=$(PACKAGE_MANAGER)"
@@ -64,6 +70,8 @@ else ifeq ($(LOCAL_ARCH),x86_64)
     TARGET_ARCH ?= amd64
 else ifeq ($(LOCAL_ARCH),amd64)
     TARGET_ARCH ?= amd64
+else ifeq ($(LOCAL_ARCH),386)
+    TARGET_ARCH ?= 386
 else ifeq ($(LOCAL_ARCH),i686)
     TARGET_ARCH ?= amd64
 else ifeq ($(shell echo $(LOCAL_ARCH) | head -c 5),armv8)
@@ -120,6 +128,8 @@ endif
 #for FIPS compliance, FPM defaults to MD5.
 RPM_DIGEST := --rpm-digest sha256
 
+GO_TEST_LOG_OUTPUT = /tmp/gotest.log
+
 .PHONY: all
 all: cloudflared test
 
@@ -129,7 +139,7 @@ clean:
 
 .PHONY: vulncheck
 vulncheck:
-	@govulncheck ./...
+	@go run -mod=readonly golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: cloudflared
 cloudflared:
@@ -152,11 +162,9 @@ generate-docker-version:
 
 .PHONY: test
 test: vet
-ifndef CI
-	go test -v -mod=vendor -race $(LDFLAGS) ./...
-else
-	@mkdir -p .cover
-	go test -v -mod=vendor -race $(LDFLAGS) -coverprofile=".cover/c.out" ./...
+	$Q go test -json -v -mod=vendor -race $(LDFLAGS) ./... 2>&1 | tee $(GO_TEST_LOG_OUTPUT)
+ifneq ($(FIPS), true)
+	@go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest -input $(GO_TEST_LOG_OUTPUT)
 endif
 
 .PHONY: cover
@@ -230,8 +238,8 @@ github-release:
 	python3 github_release.py --path $(PWD)/built_artifacts --release-version $(VERSION)
 	python3 github_message.py --release-version $(VERSION)
 
-.PHONY: macos-release
-macos-release:
+.PHONY: gitlab-release
+gitlab-release:
 	python3 github_release.py --path $(PWD)/artifacts/ --release-version $(VERSION)
 
 .PHONY: r2-linux-release
@@ -246,7 +254,7 @@ capnp:
 
 .PHONY: vet
 vet:
-	go vet -mod=vendor github.com/cloudflare/cloudflared/...
+	$Q go vet -mod=vendor github.com/cloudflare/cloudflared/...
 
 .PHONY: fmt
 fmt:
@@ -255,7 +263,7 @@ fmt:
 
 .PHONY: fmt-check
 fmt-check:
-	@./fmt-check.sh
+	@./.ci/scripts/fmt-check.sh
 
 .PHONY: lint
 lint:
@@ -264,3 +272,23 @@ lint:
 .PHONY: mocks
 mocks:
 	go generate mocks/mockgen.go
+
+.PHONY: ci-build
+ci-build:
+	@GOOS=linux GOARCH=amd64 $(MAKE) cloudflared
+	@mkdir -p artifacts
+	@mv cloudflared artifacts/cloudflared
+
+.PHONY: ci-fips-build
+ci-fips-build:
+	@FIPS=true GOOS=linux GOARCH=amd64 $(MAKE) cloudflared
+	@mkdir -p artifacts
+	@mv cloudflared artifacts/cloudflared
+
+.PHONY: ci-test
+ci-test: fmt-check lint test
+	@go run -mod=readonly github.com/jstemmer/go-junit-report/v2@latest -in $(GO_TEST_LOG_OUTPUT) -parser gojson -out report.xml -set-exit-code
+
+.PHONY: ci-fips-test
+ci-fips-test:
+	@FIPS=true $(MAKE) ci-test

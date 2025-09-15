@@ -10,6 +10,8 @@ import (
 const (
 	logFieldOriginCertPath = "originCertPath"
 	FedEndpoint            = "fed"
+	FedRampBaseApiURL      = "https://api.fed.cloudflare.com/client/v4"
+	FedRampHostname        = "management.fed.argotunnel.com"
 )
 
 type User struct {
@@ -19,6 +21,10 @@ type User struct {
 
 func (c User) AccountID() string {
 	return c.cert.AccountID
+}
+
+func (c User) Endpoint() string {
+	return c.cert.Endpoint
 }
 
 func (c User) ZoneID() string {
